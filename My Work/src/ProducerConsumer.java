@@ -1,102 +1,62 @@
-import java.util.ArrayDeque;
-import java.util.Queue;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.ReentrantLock;
 
 class Main {
    public static void main(String[] args) {
-      Queue<Integer> q = new ArrayDeque<>();
-      ReentrantLock lock = new ReentrantLock();
-      Condition notFull = lock.newCondition();
-      Condition notEmpty = lock.newCondition();
-      int capacity = 10;
+      ThreadSafeQueue<Integer> tsq = new ThreadSafeQueue<>(10);
       AtomicInteger activeProducers = new AtomicInteger(2);
-      Thread p0 = new Thread(new Producer(q, lock, notFull, notEmpty, activeProducers, capacity)), p1 = new Thread(new Producer(q, lock, notFull, notEmpty, activeProducers, capacity));
-      Thread c0 = new Thread(new Consumer(q, lock, notFull, notEmpty, activeProducers)), c1 = new Thread(new Consumer(q, lock, notFull, notEmpty, activeProducers));
-      p0.start();
-      p1.start();
-      c0.start();
-      c1.start();
+      Producer p1 = new Producer(tsq, activeProducers), p2 = new Producer(tsq, activeProducers);
+      Consumer c1 = new Consumer(tsq), c2 = new Consumer(tsq);
+      Thread t1 = new Thread(p1), t2 = new Thread(p2);
+      Thread t3 = new Thread(c1), t4 = new Thread(c2);
+      t1.start();
+      t2.start();
+      t3.start();
+      t4.start();
    }
 }
 
 class Producer implements Runnable {
-   private final Queue<Integer> q;
-   private final ReentrantLock lock;
-   private final Condition notFull;
-   private final Condition notEmpty;
    private AtomicInteger activeProducers;
-   private int cap;
+   private ThreadSafeQueue<Integer> tsq;
 
-   Producer(Queue<Integer> q, ReentrantLock lock, Condition notFull, Condition notEmpty, AtomicInteger activeProducers, int cap) {
-      this.q = q;
-      this.lock = lock;
-      this.notFull = notFull;
-      this.notEmpty = notEmpty;
+   Producer(ThreadSafeQueue<Integer> tsq, AtomicInteger activeProducers) {
+      this.tsq = tsq;
       this.activeProducers = activeProducers;
-      this.cap = cap;
    }
 
    @Override
    public void run() {
       for (int i = 0; i < 20; ++i) {
-         lock.lock();
-         try {
-            while (q.size() == cap)
-               notFull.await();
-            q.add(i);
-            System.out.println("Produced item " + i + " by Thread " + Thread.currentThread().getName());
-            notEmpty.signal();
+         tsq.add(i);
+      }
+      dec();
+   }
 
-         } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-         } finally {
-            lock.unlock();
-         }
-      }
-      lock.lock();
-      try {
-         if (activeProducers.decrementAndGet() == 0)
-            notEmpty.signalAll();
-      } finally {
-         lock.unlock();
-      }
+   public synchronized void dec() {
+      if (activeProducers.decrementAndGet() == 0)
+         tsq.shutdown();
    }
 }
 
 class Consumer implements Runnable {
-   private final Queue<Integer> q;
-   private final ReentrantLock lock;
-   private final Condition notFull;
-   private final Condition notEmpty;
-   private AtomicInteger activeProducers;
+   private final ThreadSafeQueue<Integer> tsq;
 
-   Consumer(Queue<Integer> q, ReentrantLock lock, Condition notFull, Condition notEmpty, AtomicInteger activeProducers) {
-      this.q = q;
-      this.lock = lock;
-      this.notFull = notFull;
-      this.notEmpty = notEmpty;
-      this.activeProducers = activeProducers;
+   Consumer(ThreadSafeQueue<Integer> tsq) {
+      this.tsq = tsq;
    }
 
    @Override
    public void run() {
       while (true) {
-         lock.lock();
-         try {
-            while (q.isEmpty() && activeProducers.get() > 0) {
-               notEmpty.await();
-            }
-            if (q.isEmpty()) return;
-            int top = q.poll();
-            System.out.println("Consumed item= " + top + " by thread= " + Thread.currentThread().getName());
-            notFull.signal();
-         } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-         } finally {
-            lock.unlock();
+         Optional<Integer> item = tsq.poll();
+         if (item.isEmpty()) {
+            break;
          }
+         System.out.println(
+                 "Consumed " + item.get() +
+                         " by " + Thread.currentThread().getName()
+         );
       }
    }
 }
